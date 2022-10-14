@@ -1,0 +1,827 @@
+---
+title: "Forecasting U.S. Candy Production by Using Time Series"
+author: "Nathan Lai"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(fig.width=7, fig.height=5)
+options(digits = 4)
+```
+
+```{r cache=FALSE, include=FALSE}
+# install.packages("ggplot2")
+# install.packages("ggfortify")
+library(dplyr)
+library(lubridate)
+library(MASS)
+library(ggplot2)
+library(ggfortify)
+library(forecast)
+```
+
+ \section*{Abstract}
+ 
+ - This project is addressing the U.S. candy sales from Halloween and continues into the Christmas holidays and New Year’s Day. In this project I used ACF/PACf to check and select the model, Box-cox Transformation and Log Transformation to make the model stationary, by observing the AIC values in the model selection, and Shapiro-Wilk normality test, Box-Pierce test, Ljung-Box test, and McLeod Li Test on the model diagnostic. After all this process above, I can aprove that my SARIMA time series model can be used on the future forecasting.
+ 
+ As the result, the forecast model shows a upward trending for the candy sales in the future, which matched what we observed in the original data set. The model is good to go for the future forecasting.
+ 
+ \section*{Introduction}
+ 
+ - Data Name: US Candy Production by Month, from January 1972 to December 2018.
+ 
+ - Context:
+ 
+  Halloween begins frenetic candy consumption that continues into the Christmas holidays and New Year’s Day, when people often make (usually short-lived) resolutions to lose weight. But all this consumption first needs production. Therefore, we need a time series model to forecast the candy sales in the future by using the SARIMA time series model, to make sure the manufacturer has the efficiency production and can maximize its profit.
+
+ - Content:
+ 
+  This dataset contains industrial production every month from January 1972 to December 2018. We are using 144 observations in the data, 132 observation from 2007-01-01 to 2017-12-01 as the training data to predict the next 12 months candy sales in 2018.
+  
+ - Source of the Data 
+ 
+ PRADIP DHAVALE (2020)
+ 
+ https://www.kaggle.com/pradipmd/candy-production-using-time-series/data
+ 
+ - Software
+ 
+ RStudio
+
+ \section*{Data Analysis}
+ 
+ - First, take 144 observations from the original dataset, separate 132 observations as training data and 12 observations for test data for model validation. Then building model with sales.train with 132 observations. From 2007-01-01 to 2017-12-01. Then plot the data.
+ 
+```{r echo=FALSE}
+# Load the data
+sales.csv = read.table("candy_production.csv", sep = ",", skip = 1)
+sales.csv2 = sales.csv[421:564, 2]
+# Training dataset
+sales.train = sales.csv[(421:552), ]
+# Test dataset
+sales.test = sales.csv[(553:564), ]
+```
+
+```{r echo=FALSE}
+# Plot dataset save in the file named "sales.ts", from 2007.01.01 to 2017.12.01.
+par(mfrow = c(1, 2))
+sales.ts = ts(sales.train[, 2], start = c(2007, 01), frequency = 12)
+ts.plot(sales.ts, main = "Raw Data")
+ts.plot(sales.train[, 2])
+fit = lm(sales.train[, 2] ~ as.numeric(1:length(sales.train[, 2])))
+abline(fit, col = "red")
+abline(h = mean(sales.train[, 2]), col = "blue")
+```
+ - From the graph we can observe high non-stationary with upward linear trending and seasonality. Also non-constatnt of variance and mean.
+
+```{r echo=FALSE}
+var(sales.train[, 2])
+```
+ - The variance of original dataset is 159.4.
+
+```{r echo=FALSE}
+hist(sales.train[, 2], main = "Histogram of the Training Data")
+```
+ - By plotting the histogram of the training data of the candy sales, we can observe that the histogram is badly left skewed.
+
+```{r echo=FALSE}
+par(mfrow = c(1, 2))
+acf(sales.ts, lag.max = 53, main = "ACF of the Training Data")
+pacf(sales.ts, lag.max = 53, main = "PACF of the Training Data")
+```
+  
+ - Here, ACF and PACF remain large and periodic.
+  
+      We need transformation to stabilize variance and differencing to remove seasonality and trend.
+      
+ \section*{Data Transformation}
+  
+ - Since the data is left skewed and the variance is not constant. We will try Box-Cox Transformation:
+```{r echo=FALSE}
+library(MASS)
+sales.bc = boxcox(sales.train[, 2] ~ as.numeric(1:length(sales.ts)), plotit = TRUE)
+detach("package:MASS", unload = TRUE)
+```
+ - To calculate the $\lambda$ for the Box-Cox Transformation.
+```{r echo=FALSE}
+lambda = sales.bc$x[which(sales.bc$y == max(sales.bc$y))]
+lambda
+```
+ - Box-Cox Transformation gives $\lambda = 0.5859$, with $\lambda = 0$ included within the confidence interval. Thus next step we will try Log Transformation.
+
+```{r echo=FALSE}
+sales.bc = (1 / lambda)*(sales.train[, 2]^lambda - 1)
+sales.log = log(sales.train[, 2])
+```
+
+   
+```{r echo=FALSE}
+par(mfrow = c(2, 2))
+ts.plot(sales.bc, main = "Plot after Box-Cox transformation")
+ts.plot(sales.log, main = "Plot after Log transformation")
+ts.plot(sales.train[, 2], main = "Plot before transformations")
+abline(fit, col = "red")
+abline(h = mean(sales.train[, 2]), col = "blue")
+```
+ - By plotting the dataset, we can also observed that variance is stabilized and less difference. Thus, we choose the Log Transformation for the data set.
+
+```{r echo=FALSE}
+# To produce decomposition of ln(U_t):
+y = ts(as.ts(sales.log), frequency = 12)
+decomp = decompose(y)
+plot(decomp)
+```
+ - Decomposition shows there are seasonality and slightly linear trend for the dataset. Thus we need to difference the dataset.
+  
+ \section*{Data Differencing}
+  
+ - First, we need to difference at lag 12 to remove seasonality.
+ 
+```{r echo=FALSE}
+# Differencing sales.log:
+sales.log_12 = diff(sales.log, lag = 12)
+plot.ts(sales.log_12, main = "Ln(U_t) differenced at lag 12")
+fit = lm(sales.log_12 ~ as.numeric(1:length(sales.log_12)))
+abline(fit, col = "red")
+abline(h = mean(sales.log_12), col = "blue")
+var(sales.log)
+var(sales.log_12)
+```
+ - After differencing at lag 12, the variance is much lower. That means we are not over differencing. The model now is without any seasonality but has slightly trending.
+  
+ - Next, we need to difference at lag 1 to remove trending.
+ 
+```{r echo=FALSE}
+sales.stat = diff(sales.log_12, lag = 1)
+plot.ts(sales.stat, main = "Ln(U_t) differenced at lag 12 then lag 1")
+fit = lm(sales.stat ~ as.numeric(1:length(sales.stat)))
+abline(fit, col = "red")
+abline(h = mean(sales.stat), col = "blue")
+var(sales.log)
+var(sales.log_12)
+var(sales.stat)
+```
+ - After differencing at lag 12 and then at lag 1, the variance is further lower. Model without any seasonality and trending.
+  
+ - Ploting the ACF to check the stationary
+ 
+```{r echo=FALSE}
+par(mfrow = c(2, 2))
+acf(sales.log, lag.max = 50, main = "ACF of log(U_t)")
+acf(sales.log_12, lag.max = 50, main = "ACF of ln(U_t) differenced at lag 12")
+acf(sales.stat, lag.max = 50, main = "ACF of ln(U_t) differenced at lags 12 & 1")
+```
+ - The plot of ACF of $log(U_t)$ shows that there are seasonality which indicated that it is not stationary.
+
+ - The plot of ACF of $ln(U_t)$ differenced at lag 12 shows that seasonality is no longer exists. But ACF is still decay slowly, which indicated that it is still not stationary.
+
+ - The plot of ACF of $ln(U_t)$ differenced at lags 12 & 1 shows that ACF decay corresponds to a stationary process.
+  
+ - Upon three graphs above, we can conclude that we should use the data $\bigtriangledown_1	\bigtriangledown_{12} ln(U_t)$, where $U_t$ is the training data with first 132 observations of the original data.
+
+```{r echo=FALSE}
+par(mfrow = c(1, 2))
+# Histogram of dif. at lag 12
+hist(sales.log_12, density = 20, breaks = 20, col = "blue", xlab = "", prob = TRUE, 
+     main = "Histogram of dif. at lag 12")
+m = mean(sales.log_12)
+std = sqrt(var(sales.log_12))
+curve(dnorm(x, m, std), add = TRUE)
+# Histogram of dif. at lag 12 & 1
+hist(sales.stat, density = 20, breaks = 20, col = "blue", xlab = "", prob = TRUE, 
+     main = "Histogram of dif. at lag 12 & lag 1")
+m = mean(sales.stat)
+std = sqrt(var(sales.stat))
+curve(dnorm(x, m, std), add = TRUE)
+```
+
+ - By differencing at lag 1 then lag 12, the histogram of $\bigtriangledown_1	\bigtriangledown_{12} ln(U_t)$ looks symmetric and almost Gaussian.
+
+ - Next step is analyzing the ACF and PACF the $\bigtriangledown_1	\bigtriangledown_{12} ln(U_t)$ model.
+ 
+ \section*{Model Selection}
+ 
+```{r echo=FALSE}
+par(mfrow = c(1, 2))
+acf(sales.log_12, lag.max = 40, main = "ACF of dif. at lag 12")
+pacf(sales.log_12, lag.max = 40, main = "PACF of dif. at lag 12")
+```
+
+```{r echo=FALSE}
+par(mfrow = c(1, 2))
+acf(sales.stat, lag.max = 40, main = "ACF of dif. at lag 12 & lag 1")
+pacf(sales.stat, lag.max = 40, main = "PACF of dif. at lag 12 & lag 1")
+```
+
+ - In ACF: lag 12 is strictly outside the confidence intervals. Other possible maybe lag 5.
+  
+ -  In PACF: lag 5, lag 11, and lag 12 is outside the confidence intervals. Other possible maybe lag 3. Also may try AR(11).
+
+ - Try for SARIMA(p, d, q)x(P, D, Q)s model for $ln(U_t)$:
+  s = 12, D = 1, d = 1, p = 1, or 5, P = 1, or 5, q = 1, Q = 1. Also AR(11)
+  
+  
+```{r cache=FALSE, include=FALSE}
+library(qpcR)
+```
+
+```{r include=FALSE}
+arima(sales.log, order = c(0, 1, 1), 
+      seasonal = list(order = c(0, 1, 1), period = 12), method = "ML")
+aic1 = AICc(arima(sales.log, order = c(0, 1, 1), 
+                  seasonal = list(order = c(0, 1, 1), 
+                                  period = 12), method = "ML"))
+arima(sales.log, order = c(1, 1, 1), 
+      seasonal = list(order = c(0, 1, 1), period = 12), method = "ML")
+aic2 = AICc(arima(sales.log, order = c(1, 1, 1), 
+                  seasonal = list(order = c(0, 1, 1), 
+                                  period = 12), method = "ML"))
+arima(sales.log, order = c(0, 1, 1), 
+      seasonal = list(order = c(1, 1, 1), period = 12), method = "ML")
+aic3 = AICc(arima(sales.log, order = c(0, 1, 1), 
+                  seasonal = list(order = c(1, 1, 1), 
+                                  period = 12), method = "ML"))
+```
+
+
+
+```{r include=FALSE}
+arima(sales.log, order = c(11, 1, 1), seasonal = list(order = c(0, 1, 2), period = 12), 
+      fixed = c(rep(NA, 11), NA, 0, 0), method = "ML")
+aic4 = AICc(arima(sales.log, order = c(11, 1, 1), 
+                  seasonal = list(order = c(0, 1, 2), period = 12), 
+                  fixed = c(rep(NA, 11), NA, 0, 0), method = "ML"))
+```
+
+
+```{r include=FALSE}
+arima(sales.log, order = c(0, 1, 1), 
+      seasonal = list(order = c(5, 1, 1), period = 12), method = "ML")
+aic5 = AICc(arima(sales.log, order = c(0, 1, 1), 
+                  seasonal = list(order = c(5, 1, 1), 
+                                  period = 12), method = "ML"))
+arima(sales.log, order = c(5, 1, 1), 
+      seasonal = list(order = c(0, 1, 1), 
+                      period = 12), method = "ML")
+aic6 = AICc(arima(sales.log, order = c(5, 1, 1), 
+                  seasonal = list(order = c(0, 1, 1), 
+                                  period = 12), method = "ML"))
+arima(sales.log, order = c(5, 1, 1), 
+      seasonal = list(order = c(5, 1, 1), period = 12), 
+      fixed = c(rep(NA, 5), NA, rep(0, 5), 0), method = "ML")
+aic7 = AICc(arima(sales.log, order = c(5, 1, 1), 
+                  seasonal = list(order = c(5, 1, 1), period = 12), 
+                  fixed = c(rep(NA, 5), NA, rep(0, 5), 0), method = "ML"))
+```
+
+
+```{r include=FALSE}
+AIC.table = matrix(c(aic1, aic2, aic3, aic4, aic5, aic6, aic7), ncol = 1, 
+                   byrow = TRUE)
+colnames(AIC.table) = c('AICc')
+rownames(AIC.table) = c('SARIMA(0, 1, 1)(0, 1, 1)[12]',
+                        'SARIMA(1, 1, 1)(0, 1, 1)[12]',
+                        'SARIMA(0, 1, 1)(0, 1, 1)[12]', 
+                        'SARIMA(11, 1, 1)(0, 1, 2)[12]', 
+                        'SARIMA(0, 1, 1)(5, 1, 1)[12]', 
+                        'SARIMA(5, 1, 1)(0, 1, 1)[12]', 
+                        'SARIMA(5, 1, 1)(5, 1, 1)[12]')
+AIC.table = as.table(AIC.table)
+```
+
+  
+```{r echo=FALSE}
+kable(AIC.table, caption = "AICc of the Possible Models", "pipe")
+```
+
+```{r}
+arima(sales.log, order = c(0, 1, 1), 
+      seasonal = list(order = c(0, 1, 1), 
+                      period = 12), method = "ML")
+AICc(arima(sales.log, order = c(0, 1, 1), 
+           seasonal = list(order = c(0, 1, 1), 
+                           period = 12), method = "ML"))
+arima(sales.log, order = c(1, 1, 1), 
+      seasonal = list(order = c(0, 1, 1), 
+                      period = 12), method = "ML")
+AICc(arima(sales.log, order = c(1, 1, 1), 
+           seasonal = list(order = c(0, 1, 1), 
+                           period = 12), method = "ML"))
+```
+```{r cache=FALSE, include=FALSE}
+detach("package:qpcR", unload = TRUE)
+```
+ 
+ - Possible models:
+
+ (A) 
+  $$
+  \begin{aligned}
+  \bigtriangledown_1\bigtriangledown_{12}ln(U_t) &= SARIMA(0, 1, 1) \times (0, 1, 1)_{12} \\
+    & \Rightarrow X_t = (1 - 0.160_{(0.101)}B)(1 -0.801_{(0.106)}B^{12})Z_t \\
+    \sigma^2_Z &= 0.00162 \\
+    AIC &= -408.2
+  \end{aligned}
+  $$
+
+  (B)
+  $$
+  \begin{aligned}
+  \bigtriangledown_1\bigtriangledown_{12}ln(U_t) &= SARIMA(1, 1, 1) \times (0, 1, 1)_{12} \\
+    & \Rightarrow (1 - 0.624_{(0.182)}B)(1 - B)(1 - B^{12})X_t = (1 - 0.797_{(0.144)}B)(1 - 0.794_{(0.107)}B^{12})Z_t \\
+    \sigma^2_Z &= 0.00159 \\
+    AIC &= -408.9
+  \end{aligned}
+  $$
+ \section*{Model Diagnostics}
+  
+```{r echo=FALSE}
+par(mfrow = c(1, 2))
+# To check invertibility of MA part of model A:
+source("plot.roots.R")
+plot.roots(NULL, polyroot(c(1, - 0.160)), main="(A) roots of ma part, with seasonal ")
+plot.roots(NULL, polyroot(c(1, - 0.797)), main="(B) roots of ma part, with seasonal ")
+```
+  
+ - Both MA parts of the models are invertible since their roots are outside of the unit circle.
+ 
+ - Process model (A): $X_t = (1 - 0.160_{(0.101)}B)(1 -0.801_{(0.106)}B^{12})Z_t$ to the model diagnostics:
+```{r echo=FALSE}
+par(mfrow = c(2, 2))
+fit = arima(sales.log, order=c(0, 1, 1), 
+            seasonal = list(order = c(0, 1, 1), 
+                            period = 12), method = "ML")
+res = residuals(fit)
+hist(res,density = 20, breaks = 20, col = "blue", xlab = "", prob = TRUE)
+m = mean(res)
+std = sqrt(var(res))
+curve( dnorm(x,m,std), add = TRUE )
+plot.ts(res, main = "Plot of res")
+fitt = lm(res ~ as.numeric(1:length(res))); abline(fitt, col = "red")
+abline(h = mean(res), col = "blue")
+qqnorm(res,main =  "Normal Q-Q Plot for Model B")
+qqline(res,col = "blue")
+```
+ - Upon three graphs above, there are no trend, no visible change of variance, no seasonality.
+  
+ - Sample mean is -5.17e-05 which is close to zero.
+  
+ - Histogram looks normal distributed and the QQ-plot looks has a little bit heavy tail but it is acceptable.
+
+
+```{r echo=FALSE}
+par(mfrow = c(2, 2))
+acf(res, lag.max = 40, main = "ACF of res")
+pacf(res, lag.max = 40, main = "PACF of res")
+acf(res^2, lag.max = 40, main = "ACF of res^2")
+```
+ - Most of the ACF and PACF of residuals are within the 95% confidence intervals. For the PACF, lag 5 and lag 19 is outside of the 95% confidence interval. But 5% * 40 lags = 2 lags. So it is acceptable.
+
+ - Apply the Shapiro-Wilk normality test, Box-Pierce test, Ljung-Box test, and McLeod Li Test.
+```{r echo=FALSE}
+shapiro.test(res)
+Box.test(res, lag = 12, type = c("Box-Pierce"), fitdf = 2)
+Box.test(res, lag = 12, type = c("Ljung-Box"), fitdf = 2)
+Box.test(res^2, lag = 12, type = c("Ljung-Box"), fitdf = 0)
+```
+ - All p-values are larger than the 0.05. All test passed.
+  
+ - Fitted residuals to AR(0) model. To test the stationarity.
+```{r echo=FALSE}
+ar(res, aic = TRUE, order.max = NULL, method = c("yule-walker"))
+```
+ - Since the Order selected is 6, that means the AR(p) part is not stationary. Therefore, the model fails the test.
+  
+ - Process model (B): $(1 - 0.624_{(0.182)}B)(1 - B)(1 - B^{12})X_t = (1 - 0.797_{(0.144)}B)(1 - 0.794_{(0.107)}B^{12})Z_t$ to model diagnostics:
+ 
+```{r echo=FALSE}
+par(mfrow = c(2, 2))
+fit = arima(sales.log, order=c(1, 1, 1), 
+            seasonal = list(order = c(0, 1, 1), 
+                            period = 12), method = "ML")
+res2 = residuals(fit)
+hist(res2, density = 20, breaks = 20, col = "blue", xlab = "", prob = TRUE)
+m = mean(res2)
+std = sqrt(var(res2))
+curve( dnorm(x,m,std), add = TRUE )
+plot.ts(res2, main = "Plot of res")
+fitt = lm(res2 ~ as.numeric(1:length(res2))); abline(fitt, col = "red")
+abline(h = mean(res2), col = "blue")
+qqnorm(res2, main =  "Normal Q-Q Plot for Model B")
+qqline(res2, col = "blue")
+```
+ - Upon three graphs above, there are no trend, no visible change of variance, no seasonality.
+  
+ - Sample mean is -5.17e-05 which is close to zero.
+  
+ - Histogram looks normal distributed and the QQ-plot looks has a little bit heavy tail but it is acceptable.
+
+```{r echo=FALSE}
+par(mfrow = c(2, 2))
+acf(res2, lag.max = 40, main = "ACF of res")
+pacf(res2, lag.max = 40, main = "PACF of res")
+acf(res2^2, lag.max = 40, main = "ACF of res^2")
+```
+ - Most of the ACF and PACF of residuals are within the 95% confidence intervals. For the PACF, lag 5 and lag 19 is outside of the 95% confidence interval. But 5% * 40 lags = 2 lags. So it is acceptable.
+
+ - Apply the Shapiro-Wilk normality test, Box-Pierce test, Ljung-Box test, and McLeod Li Test.
+```{r echo=FALSE}
+shapiro.test(res2)
+Box.test(res2, lag = 12, type = c("Box-Pierce"), fitdf = 3)
+Box.test(res2, lag = 12, type = c("Ljung-Box"), fitdf = 3)
+Box.test(res2^2, lag = 12, type = c("Ljung-Box"), fitdf = 0)
+```
+ - All p-values are larger than the 0.05. All test passed.
+  
+ - Fitted residuals to AR(0) model. To test the stationarity.
+```{r echo=FALSE}
+ar(res2, aic = TRUE, order.max = NULL, method = c("yule-walker"))
+```
+ - Since order selected is 0, AR(p) part is stationary.
+
+ - Since only Model (B) passed all the diagnostic test. We choose the model (B) as our final model. 
+  
+ - The final model for the logarithm transform of the original data:
+ 
+ $$
+  \begin{aligned}
+  \bigtriangledown_1\bigtriangledown_{12}ln(U_t) &= SARIMA(1, 1, 1) \times (0, 1, 1)_{12} \\
+    & \Rightarrow (1 - 0.624_{(0.182)}B)(1 - B)(1 - B^{12})X_t = (1 - 0.797_{(0.144)}B)(1 - 0.794_{(0.107)}B^{12})Z_t \\
+    \sigma^2_Z &= 0.00159 \\
+    AIC &= -408.9
+  \end{aligned}
+  $$
+  
+  and can be processed to the forecasting.
+  
+ \section*{Forecasting}
+  
+ - Forecasting the transformed data using model (B):
+```{r include=FALSE}
+fit.A = arima(sales.log, order = c(1, 1, 1), 
+              seasonal = list(order = c(0, 1, 1), 
+                              period = 12), method = "ML")
+forecast(fit.A) 
+```
+ - To produce graph with 12 forecasts on the Log Transformed data:
+ 
+```{r echo=FALSE}
+# To produce graph with 12 forecasts on transformed data:
+pred.tr = predict(fit.A, n.ahead = 12)
+U.tr = pred.tr$pred + 2*pred.tr$se 
+L.tr = pred.tr$pred - 2*pred.tr$se
+ts.plot(sales.log, xlim = c(1,length(sales.log) + 12), 
+        ylim = c(min(sales.log), max(U.tr)), main = "12 Forecasts on Transformed Data")
+lines(U.tr, col = "blue", lty = "dashed")
+lines(L.tr, col = "blue", lty = "dashed")
+points((length(sales.log) + 1):(length(sales.log) + 12), 
+       pred.tr$pred, col = "red")
+```
+
+ - To produce graph with forecasts on original data:
+ 
+```{r echo=FALSE}
+# To produce graph with forecasts on original data:
+pred.orig = exp(pred.tr$pred)
+U= exp(U.tr)
+L= exp(L.tr)
+ts.plot(sales.train[, 2], xlim = c(1,length(sales.train[, 2]) + 12), 
+        ylim = c(min(sales.train[, 2]), max(U)), main = "Forecasts on Original Data") 
+lines(U, col = "blue", lty = "dashed")
+lines(L, col = "blue", lty = "dashed")
+points((length(sales.train[, 2]) + 1):(length(sales.train[, 2]) + 12), 
+       pred.orig, col = "red")
+```
+
+
+ - To zoom the graph, starting from entry 100:
+ 
+```{r echo=FALSE}
+# To zoom the graph, starting from entry 100:
+ts.plot(sales.train[, 2], xlim = c(100, length(sales.train[, 2]) + 12), 
+        ylim = c(85, max(U)), main = "Zoom in Forecasts Starting From Entry 100 ") 
+lines(U, col = "blue", lty = "dashed")
+lines(L, col = "blue", lty = "dashed")
+points((length(sales.train[, 2]) + 1):(length(sales.train[, 2]) + 12), 
+       pred.orig, col = "red")
+```
+
+ - Comparing the forecast data and the original data.
+  
+  Forecasts — black circles
+  
+  Original data – red line
+  
+ -To plot zoomed forecasts and true values:
+ 
+```{r echo=FALSE}
+# To plot zoomed forecasts and true values:
+ts.plot(sales.csv2, xlim = c(120, length(sales.train[, 2]) + 12), 
+        ylim = c(80, max(U)), col = "red", main = "Zoomed & Compare Forecasts and True Values") 
+lines(U, col = "blue", lty = "dashed")
+lines(L, col = "blue", lty = "dashed")
+points((length(sales.train[, 2]) + 1):(length(sales.train[, 2]) + 12), 
+       pred.orig, col = "black")
+```
+
+
+ \section*{Conclusion}
+  By proofing the accuracy of our time series model:
+  $$
+  \begin{aligned}
+  \bigtriangledown_1\bigtriangledown_{12}ln(U_t) &= SARIMA(1, 1, 1) \times (0, 1, 1)_{12} \\
+    & \Rightarrow (1 - 0.624_{(0.182)}B)(1 - B)(1 - B^{12})X_t = (1 - 0.797_{(0.144)}B)(1 - 0.794_{(0.107)}B^{12})Z_t \\
+  \end{aligned}
+  $$
+  We can further use this model to predict the candy sales in the future. By predicting the future sales trending for the candies, we can tell how people make resolutions to lose weight affect the candy sales,  also to tell the manufacturer how many candies should produce in order to maximize their profit.
+  
+  By observing the forecasting, we can conclude that there will be an upward trending for the candy sales in the next year. People make resolutions to lose weight seems have less affect on the candy sales. The manufacturer should increase their production during the period from Halloween to Christmas and New Year for the next coming year.
+  
+  (*This project is constructed and followed from Professor Raisa Feldman's lectures. Referenced: February 7 - February 13, lecture 12; February 21 - February 27, lecture 15.)
+  
+  
+  \section*{Reference}
+ 
+ - Professor Raisa Feldman - UCSB (2022)
+ 
+ - https://gauchospace.ucsb.edu/courses/pluginfile.php/3660207/mod_resource/content/1/week6-Lecture%2012%20slides%20W22.pdf
+ 
+ - https://gauchocast.hosted.panopto.com/Panopto/Pages/Sessions/List.aspx#folderID=%22b1b1d305-edd3-4960-aceb-ae32001722c6%22
+ 
+ - https://gauchocast.hosted.panopto.com/Panopto/Pages/Sessions/List.aspx#folderID=%22cb85734f-8161-4379-ad07-ae3a004040e2%22
+ 
+ - https://gauchospace.ucsb.edu/courses/pluginfile.php/3746412/mod_resource/content/1/Lecture%2015-AirPass%20slides.pdf
+ 
+   \section*{Appendix}
+```{r eval=FALSE}
+# install.packages("ggplot2")
+# install.packages("ggfortify")
+library(dplyr)
+library(lubridate)
+library(MASS)
+library(ggplot2)
+library(ggfortify)
+library(forecast)
+
+# Load the data
+sales.csv = read.table("candy_production.csv", sep = ",", skip = 1)
+sales.csv2 = sales.csv[421:564, 2]
+# Training dataset
+sales.train = sales.csv[(421:552), ]
+# Test dataset
+sales.test = sales.csv[(553:564), ]
+
+# Plot dataset save in the file named "sales.ts", from 2007.01.01 to 2017.12.01.
+par(mfrow = c(1, 2))
+sales.ts = ts(sales.train[, 2], start = c(2007, 01), frequency = 12)
+ts.plot(sales.ts, main = "Raw Data")
+ts.plot(sales.train[, 2])
+fit = lm(sales.train[, 2] ~ as.numeric(1:length(sales.train[, 2])))
+abline(fit, col = "red")
+abline(h = mean(sales.train[, 2]), col = "blue")
+
+# variance of the training data
+var(sales.train[, 2])
+
+# Histogram of the Training Data
+hist(sales.train[, 2], main = "Histogram of the Training Data")
+
+# ACF/PACF of the Training Data
+par(mfrow = c(1, 2))
+acf(sales.ts, lag.max = 53, main = "ACF of the Training Data")
+pacf(sales.ts, lag.max = 53, main = "PACF of the Training Data")
+
+# apply bc transformation
+library(MASS)
+sales.bc = boxcox(sales.train[, 2] ~ as.numeric(1:length(sales.ts)), plotit = TRUE)
+detach("package:MASS", unload = TRUE)
+
+# get lambda value for bc trans.
+lambda = sales.bc$x[which(sales.bc$y == max(sales.bc$y))]
+lambda
+
+# apply bc and log transformations
+sales.bc = (1 / lambda)*(sales.train[, 2]^lambda - 1)
+sales.log = log(sales.train[, 2])
+
+#compare plots before/after transformations
+par(mfrow = c(1, 3))
+ts.plot(sales.bc, main = "Plot after Box-Cox transformation")
+ts.plot(sales.log, main = "Plot after Log transformation")
+ts.plot(sales.train[, 2], main = "Plot before transformations")
+abline(fit, col = "red")
+abline(h = mean(sales.train[, 2]), col = "blue")
+
+# To produce decomposition of ln(U_t):
+y = ts(as.ts(sales.log), frequency = 12)
+decomp = decompose(y)
+plot(decomp)
+
+# Differencing sales.log at lag 1:
+sales.log_12 = diff(sales.log, lag = 12)
+plot.ts(sales.log_12, main = "Ln(U_t) differenced at lag 12")
+fit = lm(sales.log_12 ~ as.numeric(1:length(sales.log_12)))
+abline(fit, col = "red")
+abline(h = mean(sales.log_12), col = "blue")
+var(sales.log)
+var(sales.log_12)
+
+# differencing at lag 12
+sales.stat = diff(sales.log_12, lag = 1)
+plot.ts(sales.stat, main = "Ln(U_t) differenced at lag 12 then lag 1")
+fit = lm(sales.stat ~ as.numeric(1:length(sales.stat)))
+abline(fit, col = "red")
+abline(h = mean(sales.stat), col = "blue")
+# tracking the variance
+var(sales.log)
+var(sales.log_12)
+var(sales.stat)
+
+# compare ACF of before/after differencing 
+par(mfrow = c(1, 3))
+acf(sales.log, lag.max = 50, main = "ACF of log(U_t)")
+acf(sales.log_12, lag.max = 50, main = "ACF of ln(U_t) differenced at lag 12")
+acf(sales.stat, lag.max = 50, main = "ACF of ln(U_t) differenced at lags 12 & 1")
+
+par(mfrow = c(1, 2))
+# Histogram of dif. at lag 12
+hist(sales.log_12, density = 20, breaks = 20, col = "blue", xlab = "", prob = TRUE, 
+     main = "Histogram of dif. at lag 12")
+m = mean(sales.log_12)
+std = sqrt(var(sales.log_12))
+curve(dnorm(x, m, std), add = TRUE)
+# Histogram of dif. at lag 12 & 1
+hist(sales.stat, density = 20, breaks = 20, col = "blue", xlab = "", prob = TRUE, 
+     main = "Histogram of dif. at lag 12 & lag 1")
+m = mean(sales.stat)
+std = sqrt(var(sales.stat))
+curve(dnorm(x, m, std), add = TRUE)
+
+# plot ACF/PACF of dif. at lag 12
+par(mfrow = c(1, 2))
+acf(sales.log_12, lag.max = 40, main = "ACF of dif. at lag 12")
+pacf(sales.log_12, lag.max = 40, main = "PACF of dif. at lag 12")
+
+#plot ACF/PACF of dif. at lag 12 & lag 1
+par(mfrow = c(1, 2))
+acf(sales.stat, lag.max = 40, main = "ACF of dif. at lag 12 & lag 1")
+pacf(sales.stat, lag.max = 40, main = "PACF of dif. at lag 12 & lag 1")
+
+# run all possible models and get their AICc
+library(qpcR)
+
+arima(sales.log, order = c(0, 1, 1), seasonal = list(order = c(0, 1, 1), period = 12), method = "ML")
+aic1 = AICc(arima(sales.log, order = c(0, 1, 1), seasonal = list(order = c(0, 1, 1), period = 12), method = "ML"))
+arima(sales.log, order = c(1, 1, 1), seasonal = list(order = c(0, 1, 1), period = 12), method = "ML")
+aic2 = AICc(arima(sales.log, order = c(1, 1, 1), seasonal = list(order = c(0, 1, 1), period = 12), method = "ML"))
+arima(sales.log, order = c(0, 1, 1), seasonal = list(order = c(1, 1, 1), period = 12), method = "ML")
+aic3 = AICc(arima(sales.log, order = c(0, 1, 1), seasonal = list(order = c(1, 1, 1), period = 12), method = "ML"))
+
+arima(sales.log, order = c(11, 1, 1), seasonal = list(order = c(0, 1, 2), period = 12), fixed = c(rep(NA, 11), NA, 0, 0), method = "ML")
+aic4 = AICc(arima(sales.log, order = c(11, 1, 1), seasonal = list(order = c(0, 1, 2), period = 12), fixed = c(rep(NA, 11), NA, 0, 0), method = "ML"))
+
+arima(sales.log, order = c(0, 1, 1), seasonal = list(order = c(5, 1, 1), period = 12), method = "ML")
+aic5 = AICc(arima(sales.log, order = c(0, 1, 1), seasonal = list(order = c(5, 1, 1), period = 12), method = "ML"))
+arima(sales.log, order = c(5, 1, 1), seasonal = list(order = c(0, 1, 1), period = 12), method = "ML")
+aic6 = AICc(arima(sales.log, order = c(5, 1, 1), seasonal = list(order = c(0, 1, 1), period = 12), method = "ML"))
+arima(sales.log, order = c(5, 1, 1), seasonal = list(order = c(5, 1, 1), period = 12), fixed = c(rep(NA, 5), NA, rep(0, 5), 0), method = "ML")
+aic7 = AICc(arima(sales.log, order = c(5, 1, 1), seasonal = list(order = c(5, 1, 1), period = 12), fixed = c(rep(NA, 5), NA, rep(0, 5), 0), method = "ML"))
+
+# create a matirx table for all AICc
+AIC.table = matrix(c(aic1, aic2, aic3, aic4, aic5, aic6, aic7), ncol = 1, byrow = TRUE)
+colnames(AIC.table) = c('AICc')
+rownames(AIC.table) = c('SARIMA(0, 1, 1)(0, 1, 1)[12]','SARIMA(1, 1, 1)(0, 1, 1)[12]','SARIMA(0, 1, 1)(0, 1, 1)[12]', 'SARIMA(11, 1, 1)(0, 1, 2)[12]', 'SARIMA(0, 1, 1)(5, 1, 1)[12]', 'SARIMA(5, 1, 1)(0, 1, 1)[12]', 'SARIMA(5, 1, 1)(5, 1, 1)[12]')
+AIC.table = as.table(AIC.table)
+
+# list all the AICc
+kable(AIC.table, caption = "AICc of the Possible Models", "pipe")
+
+# show coefficient and sigma^2 for the selected models
+arima(sales.log, order = c(0, 1, 1), 
+      seasonal = list(order = c(0, 1, 1), period = 12), method = "ML")
+AICc(arima(sales.log, order = c(0, 1, 1), 
+           seasonal = list(order = c(0, 1, 1), period = 12), method = "ML"))
+arima(sales.log, order = c(1, 1, 1), 
+      seasonal = list(order = c(0, 1, 1), period = 12), method = "ML")
+AICc(arima(sales.log, order = c(1, 1, 1), 
+           seasonal = list(order = c(0, 1, 1), period = 12), method = "ML"))
+
+detach("package:qpcR", unload = TRUE)
+
+
+# To check invertibility of MA part of model A:
+par(mfrow = c(1, 2))
+source("plot.roots.R")
+plot.roots(NULL, polyroot(c(1, - 0.160)), main="(A) roots of ma part, with seasonal ")
+plot.roots(NULL, polyroot(c(1, - 0.797)), main="(B) roots of ma part, with seasonal ")
+
+# data diagnostic with histogram, ts.plot and qq-plot
+par(mfrow = c(1, 3))
+fit = arima(sales.log, order=c(0, 1, 1), 
+            seasonal = list(order = c(0, 1, 1), period = 12), method = "ML")
+res = residuals(fit)
+hist(res,density = 20, breaks = 20, col = "blue", xlab = "", prob = TRUE)
+m = mean(res)
+std = sqrt(var(res))
+curve( dnorm(x,m,std), add = TRUE )
+plot.ts(res, main = "Plot of res")
+fitt = lm(res ~ as.numeric(1:length(res))); abline(fitt, col = "red")
+abline(h = mean(res), col = "blue")
+qqnorm(res,main =  "Normal Q-Q Plot for Model B")
+qqline(res,col = "blue")
+
+# ACF/PACf of res
+par(mfrow = c(1, 3))
+acf(res, lag.max = 40, main = "ACF of res")
+pacf(res, lag.max = 40, main = "PACF of res")
+acf(res^2, lag.max = 40, main = "ACF of res^2")
+
+# Apply the Shapiro-Wilk normality test, Box-Pierce test, Ljung-Box test, and McLeod Li Test.
+shapiro.test(res)
+Box.test(res, lag = 12, type = c("Box-Pierce"), fitdf = 2)
+Box.test(res, lag = 12, type = c("Ljung-Box"), fitdf = 2)
+Box.test(res^2, lag = 12, type = c("Ljung-Box"), fitdf = 0)
+
+# Fitted residuals to AR(0) model. i.e. white noise.
+ar(res, aic = TRUE, order.max = NULL, method = c("yule-walker"))
+
+# data diagnostic with histogram, ts.plot and qq-plot
+par(mfrow = c(1, 3))
+fit = arima(sales.log, order=c(1, 1, 1), 
+            seasonal = list(order = c(0, 1, 1), period = 12), method = "ML")
+res2 = residuals(fit)
+hist(res2, density = 20, breaks = 20, col = "blue", xlab = "", prob = TRUE)
+m = mean(res2)
+std = sqrt(var(res2))
+curve( dnorm(x,m,std), add = TRUE )
+plot.ts(res2, main = "Plot of res")
+fitt = lm(res2 ~ as.numeric(1:length(res2))); abline(fitt, col = "red")
+abline(h = mean(res2), col = "blue")
+qqnorm(res2, main =  "Normal Q-Q Plot for Model B")
+qqline(res2, col = "blue")
+
+# plot ACF/PACF for res
+par(mfrow = c(1, 3))
+acf(res2, lag.max = 40, main = "ACF of res")
+pacf(res2, lag.max = 40, main = "PACF of res")
+acf(res2^2, lag.max = 40, main = "ACF of res^2")
+
+# Apply the Shapiro-Wilk normality test, Box-Pierce test, Ljung-Box test, and McLeod Li Test.
+shapiro.test(res2)
+Box.test(res2, lag = 12, type = c("Box-Pierce"), fitdf = 3)
+Box.test(res2, lag = 12, type = c("Ljung-Box"), fitdf = 3)
+Box.test(res2^2, lag = 12, type = c("Ljung-Box"), fitdf = 0)
+
+# Fitted residuals to AR(0) model. i.e. white noise.
+ar(res2, aic = TRUE, order.max = NULL, method = c("yule-walker"))
+
+#fit the model & Forecasting the transformed data using model (A):
+fit.A = arima(sales.log, order = c(1, 1, 1), 
+              seasonal = list(order = c(0, 1, 1), period = 12), method = "ML")
+forecast(fit.A) 
+
+
+# To produce graph with 12 forecasts on transformed data:
+pred.tr = predict(fit.A, n.ahead = 12)
+U.tr = pred.tr$pred + 2*pred.tr$se 
+L.tr = pred.tr$pred - 2*pred.tr$se
+ts.plot(sales.log, xlim = c(1,length(sales.log) + 12), 
+        ylim = c(min(sales.log), max(U.tr)), main = "12 Forecasts on Transformed Data")
+lines(U.tr, col = "blue", lty = "dashed")
+lines(L.tr, col = "blue", lty = "dashed")
+points((length(sales.log) + 1):(length(sales.log) + 12), 
+       pred.tr$pred, col = "red")
+
+
+# To produce graph with forecasts on original data:
+pred.orig = exp(pred.tr$pred)
+U= exp(U.tr)
+L= exp(L.tr)
+ts.plot(sales.train[, 2], xlim = c(1,length(sales.train[, 2]) + 12), 
+        ylim = c(min(sales.train[, 2]), max(U)), main = "Forecasts on Original Data") 
+lines(U, col = "blue", lty = "dashed")
+lines(L, col = "blue", lty = "dashed")
+points((length(sales.train[, 2]) + 1):(length(sales.train[, 2]) + 12), 
+       pred.orig, col = "red")
+
+
+# To zoom the graph, starting from entry 100:
+ts.plot(sales.train[, 2], xlim = c(100, length(sales.train[, 2]) + 12), 
+        ylim = c(85, max(U)), main = "Zoom in Forecasts Starting From Entry 100 ") 
+lines(U, col = "blue", lty = "dashed")
+lines(L, col = "blue", lty = "dashed")
+points((length(sales.train[, 2]) + 1):(length(sales.train[, 2]) + 12), 
+       pred.orig, col = "red")
+
+# To plot zoomed forecasts and true values:
+ts.plot(sales.csv2, xlim = c(120, length(sales.train[, 2]) + 12), 
+        ylim = c(80, max(U)), col = "red", main = "Zoomed & Compare Forecasts and True Values") 
+lines(U, col = "blue", lty = "dashed")
+lines(L, col = "blue", lty = "dashed")
+points((length(sales.train[, 2]) + 1):(length(sales.train[, 2]) + 12), 
+       pred.orig, col = "black")
+
+
